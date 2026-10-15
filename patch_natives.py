@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import glob, os, io, subprocess, zipfile, struct
+import glob, os, io, subprocess, zipfile, struct, sys
 
 def fix_elf_for_android(data):
     data = bytearray(data)
@@ -9,7 +9,7 @@ def fix_elf_for_android(data):
     e_shoff, e_shentsize, e_shnum = struct.unpack('<QxxHH', data[40:50] + data[58:62])
     e_phoff, e_phentsize, e_phnum = struct.unpack('<QxxHH', data[32:42] + data[54:58])
 
-    # 1. Зануляем DT_VERNEED, DT_VERNEEDNUM, DT_VERSYM в PT_DYNAMIC
+    # 1. Зануляем теги версионирования glibc в PT_DYNAMIC
     for i in range(e_phnum):
         p_offset = e_phoff + i * e_phentsize
         p_type = struct.unpack('<I', data[p_offset:p_offset+4])[0]
@@ -21,7 +21,7 @@ def fix_elf_for_android(data):
                 if tag in [0x6ffffffe, 0x6fffffff, 0x6ffffff0]:
                     struct.pack_into('<q', data, p_fileoff+j, 0)
 
-    # 2. Конвертируем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1)
+    # 2. Исправляем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1) во ВСЕХ символах
     for i in range(e_shnum):
         offset = e_shoff + i * e_shentsize
         sh_type = struct.unpack('<I', data[offset+4:offset+8])[0]
@@ -36,12 +36,12 @@ def fix_elf_for_android(data):
                 if st_info_pos < len(data):
                     st_info = data[st_info_pos]
                     if (st_info >> 4) == 10:  # STB_GNU_UNIQUE
-                        data[st_info_pos] = (1 << 4) | (st_info & 0xf)
+                        data[st_info_pos] = (1 << 4) | (st_info & 0xf)  # STB_GLOBAL
 
     return bytes(data)
 
 def patch_single_elf(filename, data):
-    tmp_path = "tmp_native.so"
+    tmp_path = "tmp_native_patch.bin"
     with open(tmp_path, "wb") as f:
         f.write(data)
 
@@ -60,6 +60,14 @@ def patch_single_elf(filename, data):
 
     return data
 
+def patch_file(filepath):
+    print(f"[patch_natives] Patching raw file: {filepath}")
+    with open(filepath, "rb") as f:
+        data = f.read()
+    patched = patch_single_elf(os.path.basename(filepath), data)
+    with open(filepath, "wb") as f:
+        f.write(patched)
+
 def patch_embedded(jar_bytes):
     with zipfile.ZipFile(io.BytesIO(jar_bytes), "r") as in_z:
         out_buf = io.BytesIO()
@@ -68,12 +76,21 @@ def patch_embedded(jar_bytes):
                 data = in_z.read(item.filename)
                 if item.filename.endswith(".jar"):
                     data = patch_embedded(data)
-                elif item.filename.endswith(".so"):
+                elif ".so" in item.filename:  # ЛОВИТ .so, .so.6, .so.1, .so.0!
                     data = patch_single_elf(item.filename, data)
                 out_z.writestr(item, data)
         return out_buf.getvalue()
 
 def main():
+    if len(sys.argv) > 1:
+        for p in sys.argv[1:]:
+            patch_file(p)
+        return
+
+    for res_so in glob.glob("src/main/resources/natives/arm64/*"):
+        if ".so" in res_so:
+            patch_file(res_so)
+
     jars = glob.glob("build/libs/*.jar")
     print(f"[patch_natives] Found {len(jars)} jars: {jars}")
     for jar in jars:
@@ -83,7 +100,7 @@ def main():
         patched = patch_embedded(content)
         with open(jar, "wb") as f:
             f.write(patched)
-        print(f"[patch_natives] Done: {jar}")
+        print(f"[patch_natives] Successfully patched: {jar}")
 
 if __name__ == "__main__":
     main()
