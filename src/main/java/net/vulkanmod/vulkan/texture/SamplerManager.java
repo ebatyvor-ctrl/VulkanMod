@@ -101,8 +101,10 @@ public abstract class SamplerManager {
             samplerInfo.minLod(0.0F);
             samplerInfo.mipLodBias(0.0F);
 
-            // Reduction Mode
-            if (sampler.hasReductionMode()) {
+            // Reduction Mode (weighted average, 0, is the default behaviour and needs no struct;
+            // on Vulkan 1.1 the struct requires VK_EXT_sampler_filter_minmax to be enabled)
+            if (sampler.hasReductionMode() && sampler.getReductionMode() != 0
+                && DeviceManager.samplerFilterMinmaxEnabled) {
                 VkSamplerReductionModeCreateInfo reductionModeInfo = VkSamplerReductionModeCreateInfo.calloc(stack);
                 reductionModeInfo.sType$Default();
                 reductionModeInfo.reductionMode(sampler.getReductionMode());

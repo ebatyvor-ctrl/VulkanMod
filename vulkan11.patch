@@ -1,0 +1,322 @@
+From 133a5035c9d18ebf0acd7ce68d3b46525b9664c2 Mon Sep 17 00:00:00 2001
+From: ebatyvor-ctrl <ebatyvor@gmail.com>
+Date: Thu, 15 Oct 2026 19:46:02 +0300
+Subject: [PATCH] Port renderer init to Vulkan 1.1 (classic render pass path)
+
+- Force DYNAMIC_RENDERING=false; require only VK_KHR_swapchain
+- Use VK_API_VERSION_1_1 for instance, device, VMA and shaderc target env
+- Replace VkPhysicalDeviceVulkan11/12Features with VkPhysicalDeviceShaderDrawParametersFeatures
+- Fix pNext chains in DeviceManager and Device
+- Use VK11.vkGetPhysicalDeviceProperties2
+- Enable VK_EXT_sampler_filter_minmax only when present
+- GraphicsPipeline: fall back to the builder's render pass when PipelineState has none
+
+---
+ src/main/java/net/vulkanmod/vulkan/Vulkan.java                 | 17 +++++----
+ src/main/java/net/vulkanmod/vulkan/device/Device.java          | 36 ++++++++++---------
+ src/main/java/net/vulkanmod/vulkan/device/DeviceManager.java   | 33 ++++++++---------
+ src/main/java/net/vulkanmod/vulkan/shader/GraphicsPipeline.java| 13 ++++++-
+ src/main/java/net/vulkanmod/vulkan/shader/SpirvCompiler.java   |  4 +--
+ src/main/java/net/vulkanmod/vulkan/texture/SamplerManager.java |  6 ++--
+ 6 files changed, 65 insertions(+), 44 deletions(-)
+
+diff --git a/src/main/java/net/vulkanmod/vulkan/Vulkan.java b/src/main/java/net/vulkanmod/vulkan/Vulkan.java
+index 985e840..25e7a8d 100644
+--- a/src/main/java/net/vulkanmod/vulkan/Vulkan.java
++++ b/src/main/java/net/vulkanmod/vulkan/Vulkan.java
+@@ -41,14 +41,16 @@ import static org.lwjgl.util.vma.Vma.vmaDestroyAllocator;
+ import static org.lwjgl.vulkan.EXTDebugUtils.*;
+ import static org.lwjgl.vulkan.KHRPortabilityEnumeration.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+ import static org.lwjgl.vulkan.VK10.*;
+-import static org.lwjgl.vulkan.VK12.VK_API_VERSION_1_2;
++import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
+ 
+ public class Vulkan {
+ 
+         public static final boolean ENABLE_VALIDATION_LAYERS = false;
+ //    public static final boolean ENABLE_VALIDATION_LAYERS = true;
+ 
+-    public static final boolean DYNAMIC_RENDERING = true;
++    // Vulkan 1.1 port: VK_KHR_dynamic_rendering is unavailable on Adreno 650 (driver 1.1.128),
++    // so the classic RenderPass/Framebuffer path is forced.
++    public static final boolean DYNAMIC_RENDERING = false;
+ 
+     public static final Set<String> VALIDATION_LAYERS;
+ 
+@@ -64,9 +66,10 @@ public class Vulkan {
+         }
+     }
+ 
+-    public static final Set<String> REQUIRED_DEVICE_EXTENSIONS = Set.of(
+-            "VK_KHR_dynamic_rendering", "VK_KHR_synchronization2", "VK_KHR_swapchain"
+-    );
++    // VK_KHR_synchronization2 is not used anywhere in the code, so it is no longer required.
++    public static final Set<String> REQUIRED_DEVICE_EXTENSIONS = DYNAMIC_RENDERING
++            ? Set.of("VK_KHR_dynamic_rendering", "VK_KHR_swapchain")
++            : Set.of("VK_KHR_swapchain");
+ 
+     public static long window;
+ 
+@@ -166,7 +169,7 @@ public class Vulkan {
+             allocatorCreateInfo.device(DeviceManager.vkDevice);
+             allocatorCreateInfo.pVulkanFunctions(vulkanFunctions);
+             allocatorCreateInfo.instance(Instance.instance);
+-            allocatorCreateInfo.vulkanApiVersion(VK_API_VERSION_1_2);
++            allocatorCreateInfo.vulkanApiVersion(VK_API_VERSION_1_1);
+ 
+             PointerBuffer pAllocator = stack.pointers(VK_NULL_HANDLE);
+ 
+@@ -265,7 +268,7 @@ public class Vulkan {
+                 appInfo.applicationVersion(VK_MAKE_VERSION(1, 0, 0));
+                 appInfo.pEngineName(stack.UTF8Safe("VulkanMod Engine"));
+                 appInfo.engineVersion(VK_MAKE_VERSION(1, 0, 0));
+-                appInfo.apiVersion(VK_API_VERSION_1_2);
++                appInfo.apiVersion(VK_API_VERSION_1_1);
+ 
+                 VkInstanceCreateInfo createInfo = VkInstanceCreateInfo.calloc(stack);
+ 
+diff --git a/src/main/java/net/vulkanmod/vulkan/device/Device.java b/src/main/java/net/vulkanmod/vulkan/device/Device.java
+index e9dfdea..d4e9891 100644
+--- a/src/main/java/net/vulkanmod/vulkan/device/Device.java
++++ b/src/main/java/net/vulkanmod/vulkan/device/Device.java
+@@ -18,13 +18,14 @@ import static org.lwjgl.vulkan.VK11.*;
+ public class Device {
+     final VkPhysicalDevice physicalDevice;
+     final VkPhysicalDeviceProperties2 properties;
+-    final VkPhysicalDeviceVulkan11Properties vk11Properties;
+     final VkPhysicalDeviceMultiDrawPropertiesEXT multiDrawPropertiesEXT;
+     final VkPhysicalDeviceDriverProperties driverProperties;
+     final VkExtensionProperties.Buffer extensionProperties;
+     public final VkPhysicalDeviceFeatures2 availableFeatures;
+-    public final VkPhysicalDeviceVulkan11Features availableFeatures11;
+-    public final VkPhysicalDeviceVulkan12Features availableFeatures12;
++    // Vulkan 1.1 compatible replacement for VkPhysicalDeviceVulkan11Features
++    public final VkPhysicalDeviceShaderDrawParametersFeatures availableFeatures11;
++    // VK_EXT_sampler_filter_minmax is an extension on Vulkan 1.1 (it has no feature struct)
++    public final boolean samplerFilterMinmaxSupported;
+ 
+     private final int vendorId;
+     public final String vendorIdString;
+@@ -48,17 +49,25 @@ public class Device {
+         this.extensionProperties = getAvailableExtension(physicalDevice);
+ 
+         this.properties = VkPhysicalDeviceProperties2.calloc().sType$Default();
+-        this.vk11Properties = VkPhysicalDeviceVulkan11Properties.calloc().sType$Default();
+         this.driverProperties = VkPhysicalDeviceDriverProperties.calloc().sType$Default();
+         this.multiDrawPropertiesEXT = VkPhysicalDeviceMultiDrawPropertiesEXT.calloc().sType$Default();
+-        this.properties.pNext(this.driverProperties);
+-        this.properties.pNext(this.vk11Properties);
++
++        // Build a proper linked pNext chain (repeated pNext(...) calls overwrite each other).
++        // Structs are only chained when the extension that provides them is present.
++        long chainTail = 0L;
++        if (this.hasExtension("VK_KHR_driver_properties")) {
++            this.driverProperties.pNext(chainTail);
++            chainTail = this.driverProperties.address();
++        }
+         if (this.hasExtension("VK_EXT_multi_draw")) {
+-            this.properties.pNext(this.multiDrawPropertiesEXT);
++            this.multiDrawPropertiesEXT.pNext(chainTail);
++            chainTail = this.multiDrawPropertiesEXT.address();
+             this.directMultiDrawSupported = true;
+         }
++        this.properties.pNext(chainTail);
+ 
+-        VK12.vkGetPhysicalDeviceProperties2(physicalDevice, this.properties);
++        // vkGetPhysicalDeviceProperties2 is core in Vulkan 1.1
++        VK11.vkGetPhysicalDeviceProperties2(physicalDevice, this.properties);
+ 
+         this.vendorId = properties.properties().vendorID();
+         this.vendorIdString = decodeVendor(properties.properties().vendorID());
+@@ -69,11 +78,10 @@ public class Device {
+ 
+         this.availableFeatures = VkPhysicalDeviceFeatures2.calloc().sType$Default();
+ 
+-        this.availableFeatures11 = VkPhysicalDeviceVulkan11Features.malloc().sType$Default();
+-        this.availableFeatures.pNext(this.availableFeatures11);
++        this.availableFeatures11 = VkPhysicalDeviceShaderDrawParametersFeatures.calloc().sType$Default();
++        this.availableFeatures.pNext(this.availableFeatures11.address());
+ 
+-        this.availableFeatures12 = VkPhysicalDeviceVulkan12Features.malloc().sType$Default();
+-        this.availableFeatures.pNext(this.availableFeatures12);
++        this.samplerFilterMinmaxSupported = this.hasExtension("VK_EXT_sampler_filter_minmax");
+ 
+         vkGetPhysicalDeviceFeatures2(this.physicalDevice, this.availableFeatures);
+ 
+@@ -134,10 +142,6 @@ public class Device {
+         return this.properties.properties();
+     }
+ 
+-    public VkPhysicalDeviceVulkan11Properties getVk11Properties() {
+-        return vk11Properties;
+-    }
+-
+     public VkPhysicalDeviceMultiDrawPropertiesEXT getMultiDrawPropertiesEXT() {
+         return multiDrawPropertiesEXT;
+     }
+diff --git a/src/main/java/net/vulkanmod/vulkan/device/DeviceManager.java b/src/main/java/net/vulkanmod/vulkan/device/DeviceManager.java
+index 9e500fe..fd36a8c 100644
+--- a/src/main/java/net/vulkanmod/vulkan/device/DeviceManager.java
++++ b/src/main/java/net/vulkanmod/vulkan/device/DeviceManager.java
+@@ -24,7 +24,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
+ import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+ import static org.lwjgl.vulkan.KHRSurface.*;
+ import static org.lwjgl.vulkan.VK10.*;
+-import static org.lwjgl.vulkan.VK12.VK_API_VERSION_1_2;
++import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
+ 
+ public abstract class DeviceManager {
+     public static List<Device> availableDevices;
+@@ -41,6 +41,7 @@ public abstract class DeviceManager {
+     private static Set<String> enabledExtensions;
+     private static SurfaceProperties surfaceProperties;
+     public static boolean fullScreenExclusiveControl = false;
++    public static boolean samplerFilterMinmaxEnabled = false;
+ 
+     static GraphicsQueue graphicsQueue;
+     static PresentQueue presentQueue;
+@@ -171,13 +172,11 @@ public abstract class DeviceManager {
+                 queueCreateInfo.pQueuePriorities(stack.floats(1.0f));
+             }
+ 
+-            VkPhysicalDeviceVulkan11Features deviceVulkan11Features = VkPhysicalDeviceVulkan11Features.calloc(stack);
+-            deviceVulkan11Features.sType$Default();
+-            deviceVulkan11Features.shaderDrawParameters(device.isDrawIndirectSupported());
+-
+-            VkPhysicalDeviceVulkan12Features deviceVulkan12Features = VkPhysicalDeviceVulkan12Features.calloc(stack);
+-            deviceVulkan12Features.sType$Default();
+-            deviceVulkan12Features.hostQueryReset(true);
++            // Vulkan 1.1: VkPhysicalDeviceVulkan11Features/Vulkan12Features do not exist, use the
++            // dedicated core-1.1 struct. hostQueryReset is not used by the mod, so it is dropped.
++            VkPhysicalDeviceShaderDrawParametersFeatures drawParametersFeatures = VkPhysicalDeviceShaderDrawParametersFeatures.calloc(stack);
++            drawParametersFeatures.sType$Default();
++            drawParametersFeatures.shaderDrawParameters(device.isDrawIndirectSupported());
+ 
+             VkPhysicalDeviceFeatures2 deviceFeatures = VkPhysicalDeviceFeatures2.calloc(stack);
+             deviceFeatures.sType$Default();
+@@ -192,28 +191,30 @@ public abstract class DeviceManager {
+                 VRenderSystem.canSetLineWidth = true;
+             }
+ 
+-            if (device.availableFeatures12.samplerFilterMinmax()) {
+-                deviceVulkan12Features.samplerFilterMinmax(true);
+-            }
+-
+             VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
+             createInfo.sType$Default();
+             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
+             createInfo.pQueueCreateInfos(queueCreateInfos);
+             createInfo.pEnabledFeatures(deviceFeatures.features());
+-            createInfo.pNext(deviceVulkan11Features);
+-            createInfo.pNext(deviceVulkan12Features);
++            // Properly linked pNext chain: createInfo -> drawParametersFeatures -> [dynamicRendering]
++            createInfo.pNext(drawParametersFeatures.address());
+ 
+             if (Vulkan.DYNAMIC_RENDERING) {
+                 VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeaturesKHR = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack);
+                 dynamicRenderingFeaturesKHR.sType$Default();
+                 dynamicRenderingFeaturesKHR.dynamicRendering(true);
+ 
+-                deviceVulkan11Features.pNext(dynamicRenderingFeaturesKHR.address());
++                drawParametersFeatures.pNext(dynamicRenderingFeaturesKHR.address());
+             }
+ 
+             HashSet<String> enabledExtensions = new HashSet<>(Vulkan.REQUIRED_DEVICE_EXTENSIONS);
+ 
++            // Core in 1.2, but only an optional extension on Vulkan 1.1: enable it only if present
++            if (device.samplerFilterMinmaxSupported) {
++                enabledExtensions.add("VK_EXT_sampler_filter_minmax");
++            }
++            samplerFilterMinmaxEnabled = device.samplerFilterMinmaxSupported;
++
+             if (device.hasExtension("VK_KHR_portability_subset")) {
+                 enabledExtensions.add("VK_KHR_portability_subset");
+             }
+@@ -247,7 +248,7 @@ public abstract class DeviceManager {
+             int res = vkCreateDevice(physicalDevice, createInfo, null, pDevice);
+             Vulkan.checkResult(res, "Failed to create logical device");
+ 
+-            vkDevice = new VkDevice(pDevice.get(0), physicalDevice, createInfo, VK_API_VERSION_1_2);
++            vkDevice = new VkDevice(pDevice.get(0), physicalDevice, createInfo, VK_API_VERSION_1_1);
+ 
+             graphicsQueue = new GraphicsQueue(stack, indices.graphicsFamily);
+             transferQueue = new TransferQueue(stack, indices.transferFamily);
+diff --git a/src/main/java/net/vulkanmod/vulkan/shader/GraphicsPipeline.java b/src/main/java/net/vulkanmod/vulkan/shader/GraphicsPipeline.java
+index 9840dfc..31cda31 100644
+--- a/src/main/java/net/vulkanmod/vulkan/shader/GraphicsPipeline.java
++++ b/src/main/java/net/vulkanmod/vulkan/shader/GraphicsPipeline.java
+@@ -10,6 +10,7 @@ import net.vulkanmod.vulkan.Renderer;
+ import net.vulkanmod.vulkan.Vulkan;
+ import net.vulkanmod.vulkan.device.DeviceManager;
+ import net.vulkanmod.vulkan.framebuffer.Framebuffer;
++import net.vulkanmod.vulkan.framebuffer.RenderPass;
+ import org.lwjgl.system.MemoryStack;
+ import org.lwjgl.system.MemoryUtil;
+ import org.lwjgl.vulkan.*;
+@@ -30,8 +31,13 @@ public class GraphicsPipeline extends Pipeline {
+     private long vertShaderModule = 0;
+     private long fragShaderModule = 0;
+ 
++    // Fallback render pass for the classic (non dynamic rendering) path when the
++    // PipelineState carries no render pass (e.g. PipelineState.DEFAULT).
++    private final RenderPass defaultRenderPass;
++
+     GraphicsPipeline(Builder builder) {
+         super(builder.name);
++        this.defaultRenderPass = builder.renderPass;
+         this.buffers = builder.UBOs;
+         this.imageDescriptors = builder.imageDescriptors;
+         this.pushConstants = builder.pushConstants;
+@@ -194,7 +200,12 @@ public class GraphicsPipeline extends Pipeline {
+             pipelineInfo.basePipelineIndex(-1);
+ 
+             if (!Vulkan.DYNAMIC_RENDERING) {
+-                pipelineInfo.renderPass(state.renderPass.getId());
++                RenderPass renderPass = state.renderPass != null ? state.renderPass : this.defaultRenderPass;
++                if (renderPass == null) {
++                    throw new IllegalStateException("No render pass available for pipeline " + this.name);
++                }
++
++                pipelineInfo.renderPass(renderPass.getId());
+                 pipelineInfo.subpass(0);
+             }
+             else {
+diff --git a/src/main/java/net/vulkanmod/vulkan/shader/SpirvCompiler.java b/src/main/java/net/vulkanmod/vulkan/shader/SpirvCompiler.java
+index 03a6dab..d328319 100644
+--- a/src/main/java/net/vulkanmod/vulkan/shader/SpirvCompiler.java
++++ b/src/main/java/net/vulkanmod/vulkan/shader/SpirvCompiler.java
+@@ -7,7 +7,7 @@ import org.lwjgl.util.shaderc.Shaderc;
+ import org.lwjgl.util.shaderc.ShadercIncludeResolveI;
+ import org.lwjgl.util.shaderc.ShadercIncludeResult;
+ import org.lwjgl.util.shaderc.ShadercIncludeResultReleaseI;
+-import org.lwjgl.vulkan.VK12;
++import org.lwjgl.vulkan.VK11;
+ 
+ import java.io.IOException;
+ import java.net.URI;
+@@ -59,7 +59,7 @@ public class SpirvCompiler {
+         if (DEBUG)
+             shaderc_compile_options_set_generate_debug_info(options);
+ 
+-        shaderc_compile_options_set_target_env(options, shaderc_env_version_vulkan_1_2, VK12.VK_API_VERSION_1_2);
++        shaderc_compile_options_set_target_env(options, shaderc_env_version_vulkan_1_1, VK11.VK_API_VERSION_1_1);
+         shaderc_compile_options_set_include_callbacks(options, SHADER_INCLUDER, SHADER_RELEASER, pUserData);
+ 
+         Shaderc.shaderc_compile_options_set_auto_bind_uniforms(options, true);
+diff --git a/src/main/java/net/vulkanmod/vulkan/texture/SamplerManager.java b/src/main/java/net/vulkanmod/vulkan/texture/SamplerManager.java
+index d2698bc..bb56fc6 100644
+--- a/src/main/java/net/vulkanmod/vulkan/texture/SamplerManager.java
++++ b/src/main/java/net/vulkanmod/vulkan/texture/SamplerManager.java
+@@ -101,8 +101,10 @@ public abstract class SamplerManager {
+             samplerInfo.minLod(0.0F);
+             samplerInfo.mipLodBias(0.0F);
+ 
+-            // Reduction Mode
+-            if (sampler.hasReductionMode()) {
++            // Reduction Mode (weighted average, 0, is the default behaviour and needs no struct;
++            // on Vulkan 1.1 the struct requires VK_EXT_sampler_filter_minmax to be enabled)
++            if (sampler.hasReductionMode() && sampler.getReductionMode() != 0
++                && DeviceManager.samplerFilterMinmaxEnabled) {
+                 VkSamplerReductionModeCreateInfo reductionModeInfo = VkSamplerReductionModeCreateInfo.calloc(stack);
+                 reductionModeInfo.sType$Default();
+                 reductionModeInfo.reductionMode(sampler.getReductionMode());

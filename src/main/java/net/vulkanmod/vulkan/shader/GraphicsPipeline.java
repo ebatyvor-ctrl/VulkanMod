@@ -10,6 +10,7 @@ import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.Vulkan;
 import net.vulkanmod.vulkan.device.DeviceManager;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
+import net.vulkanmod.vulkan.framebuffer.RenderPass;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
 import org.lwjgl.vulkan.*;
@@ -30,8 +31,13 @@ public class GraphicsPipeline extends Pipeline {
     private long vertShaderModule = 0;
     private long fragShaderModule = 0;
 
+    // Fallback render pass for the classic (non dynamic rendering) path when the
+    // PipelineState carries no render pass (e.g. PipelineState.DEFAULT).
+    private final RenderPass defaultRenderPass;
+
     GraphicsPipeline(Builder builder) {
         super(builder.name);
+        this.defaultRenderPass = builder.renderPass;
         this.buffers = builder.UBOs;
         this.imageDescriptors = builder.imageDescriptors;
         this.pushConstants = builder.pushConstants;
@@ -194,7 +200,12 @@ public class GraphicsPipeline extends Pipeline {
             pipelineInfo.basePipelineIndex(-1);
 
             if (!Vulkan.DYNAMIC_RENDERING) {
-                pipelineInfo.renderPass(state.renderPass.getId());
+                RenderPass renderPass = state.renderPass != null ? state.renderPass : this.defaultRenderPass;
+                if (renderPass == null) {
+                    throw new IllegalStateException("No render pass available for pipeline " + this.name);
+                }
+
+                pipelineInfo.renderPass(renderPass.getId());
                 pipelineInfo.subpass(0);
             }
             else {

@@ -18,13 +18,14 @@ import static org.lwjgl.vulkan.VK11.*;
 public class Device {
     final VkPhysicalDevice physicalDevice;
     final VkPhysicalDeviceProperties2 properties;
-    final VkPhysicalDeviceVulkan11Properties vk11Properties;
     final VkPhysicalDeviceMultiDrawPropertiesEXT multiDrawPropertiesEXT;
     final VkPhysicalDeviceDriverProperties driverProperties;
     final VkExtensionProperties.Buffer extensionProperties;
     public final VkPhysicalDeviceFeatures2 availableFeatures;
-    public final VkPhysicalDeviceVulkan11Features availableFeatures11;
-    public final VkPhysicalDeviceVulkan12Features availableFeatures12;
+    // Vulkan 1.1 compatible replacement for VkPhysicalDeviceVulkan11Features
+    public final VkPhysicalDeviceShaderDrawParametersFeatures availableFeatures11;
+    // VK_EXT_sampler_filter_minmax is an extension on Vulkan 1.1 (it has no feature struct)
+    public final boolean samplerFilterMinmaxSupported;
 
     private final int vendorId;
     public final String vendorIdString;
@@ -48,17 +49,25 @@ public class Device {
         this.extensionProperties = getAvailableExtension(physicalDevice);
 
         this.properties = VkPhysicalDeviceProperties2.calloc().sType$Default();
-        this.vk11Properties = VkPhysicalDeviceVulkan11Properties.calloc().sType$Default();
         this.driverProperties = VkPhysicalDeviceDriverProperties.calloc().sType$Default();
         this.multiDrawPropertiesEXT = VkPhysicalDeviceMultiDrawPropertiesEXT.calloc().sType$Default();
-        this.properties.pNext(this.driverProperties);
-        this.properties.pNext(this.vk11Properties);
+
+        // Build a proper linked pNext chain (repeated pNext(...) calls overwrite each other).
+        // Structs are only chained when the extension that provides them is present.
+        long chainTail = 0L;
+        if (this.hasExtension("VK_KHR_driver_properties")) {
+            this.driverProperties.pNext(chainTail);
+            chainTail = this.driverProperties.address();
+        }
         if (this.hasExtension("VK_EXT_multi_draw")) {
-            this.properties.pNext(this.multiDrawPropertiesEXT);
+            this.multiDrawPropertiesEXT.pNext(chainTail);
+            chainTail = this.multiDrawPropertiesEXT.address();
             this.directMultiDrawSupported = true;
         }
+        this.properties.pNext(chainTail);
 
-        VK12.vkGetPhysicalDeviceProperties2(physicalDevice, this.properties);
+        // vkGetPhysicalDeviceProperties2 is core in Vulkan 1.1
+        VK11.vkGetPhysicalDeviceProperties2(physicalDevice, this.properties);
 
         this.vendorId = properties.properties().vendorID();
         this.vendorIdString = decodeVendor(properties.properties().vendorID());
@@ -69,11 +78,10 @@ public class Device {
 
         this.availableFeatures = VkPhysicalDeviceFeatures2.calloc().sType$Default();
 
-        this.availableFeatures11 = VkPhysicalDeviceVulkan11Features.malloc().sType$Default();
-        this.availableFeatures.pNext(this.availableFeatures11);
+        this.availableFeatures11 = VkPhysicalDeviceShaderDrawParametersFeatures.calloc().sType$Default();
+        this.availableFeatures.pNext(this.availableFeatures11.address());
 
-        this.availableFeatures12 = VkPhysicalDeviceVulkan12Features.malloc().sType$Default();
-        this.availableFeatures.pNext(this.availableFeatures12);
+        this.samplerFilterMinmaxSupported = this.hasExtension("VK_EXT_sampler_filter_minmax");
 
         vkGetPhysicalDeviceFeatures2(this.physicalDevice, this.availableFeatures);
 
@@ -132,10 +140,6 @@ public class Device {
 
     public VkPhysicalDeviceProperties properties() {
         return this.properties.properties();
-    }
-
-    public VkPhysicalDeviceVulkan11Properties getVk11Properties() {
-        return vk11Properties;
     }
 
     public VkPhysicalDeviceMultiDrawPropertiesEXT getMultiDrawPropertiesEXT() {

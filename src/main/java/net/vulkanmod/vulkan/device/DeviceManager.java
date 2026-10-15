@@ -24,7 +24,7 @@ import static org.lwjgl.system.MemoryStack.stackPush;
 import static org.lwjgl.vulkan.EXTDebugUtils.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 import static org.lwjgl.vulkan.KHRSurface.*;
 import static org.lwjgl.vulkan.VK10.*;
-import static org.lwjgl.vulkan.VK12.VK_API_VERSION_1_2;
+import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
 
 public abstract class DeviceManager {
     public static List<Device> availableDevices;
@@ -41,6 +41,7 @@ public abstract class DeviceManager {
     private static Set<String> enabledExtensions;
     private static SurfaceProperties surfaceProperties;
     public static boolean fullScreenExclusiveControl = false;
+    public static boolean samplerFilterMinmaxEnabled = false;
 
     static GraphicsQueue graphicsQueue;
     static PresentQueue presentQueue;
@@ -171,13 +172,11 @@ public abstract class DeviceManager {
                 queueCreateInfo.pQueuePriorities(stack.floats(1.0f));
             }
 
-            VkPhysicalDeviceVulkan11Features deviceVulkan11Features = VkPhysicalDeviceVulkan11Features.calloc(stack);
-            deviceVulkan11Features.sType$Default();
-            deviceVulkan11Features.shaderDrawParameters(device.isDrawIndirectSupported());
-
-            VkPhysicalDeviceVulkan12Features deviceVulkan12Features = VkPhysicalDeviceVulkan12Features.calloc(stack);
-            deviceVulkan12Features.sType$Default();
-            deviceVulkan12Features.hostQueryReset(true);
+            // Vulkan 1.1: VkPhysicalDeviceVulkan11Features/Vulkan12Features do not exist, use the
+            // dedicated core-1.1 struct. hostQueryReset is not used by the mod, so it is dropped.
+            VkPhysicalDeviceShaderDrawParametersFeatures drawParametersFeatures = VkPhysicalDeviceShaderDrawParametersFeatures.calloc(stack);
+            drawParametersFeatures.sType$Default();
+            drawParametersFeatures.shaderDrawParameters(device.isDrawIndirectSupported());
 
             VkPhysicalDeviceFeatures2 deviceFeatures = VkPhysicalDeviceFeatures2.calloc(stack);
             deviceFeatures.sType$Default();
@@ -192,27 +191,29 @@ public abstract class DeviceManager {
                 VRenderSystem.canSetLineWidth = true;
             }
 
-            if (device.availableFeatures12.samplerFilterMinmax()) {
-                deviceVulkan12Features.samplerFilterMinmax(true);
-            }
-
             VkDeviceCreateInfo createInfo = VkDeviceCreateInfo.calloc(stack);
             createInfo.sType$Default();
             createInfo.sType(VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO);
             createInfo.pQueueCreateInfos(queueCreateInfos);
             createInfo.pEnabledFeatures(deviceFeatures.features());
-            createInfo.pNext(deviceVulkan11Features);
-            createInfo.pNext(deviceVulkan12Features);
+            // Properly linked pNext chain: createInfo -> drawParametersFeatures -> [dynamicRendering]
+            createInfo.pNext(drawParametersFeatures.address());
 
             if (Vulkan.DYNAMIC_RENDERING) {
                 VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeaturesKHR = VkPhysicalDeviceDynamicRenderingFeaturesKHR.calloc(stack);
                 dynamicRenderingFeaturesKHR.sType$Default();
                 dynamicRenderingFeaturesKHR.dynamicRendering(true);
 
-                deviceVulkan11Features.pNext(dynamicRenderingFeaturesKHR.address());
+                drawParametersFeatures.pNext(dynamicRenderingFeaturesKHR.address());
             }
 
             HashSet<String> enabledExtensions = new HashSet<>(Vulkan.REQUIRED_DEVICE_EXTENSIONS);
+
+            // Core in 1.2, but only an optional extension on Vulkan 1.1: enable it only if present
+            if (device.samplerFilterMinmaxSupported) {
+                enabledExtensions.add("VK_EXT_sampler_filter_minmax");
+            }
+            samplerFilterMinmaxEnabled = device.samplerFilterMinmaxSupported;
 
             if (device.hasExtension("VK_KHR_portability_subset")) {
                 enabledExtensions.add("VK_KHR_portability_subset");
@@ -247,7 +248,7 @@ public abstract class DeviceManager {
             int res = vkCreateDevice(physicalDevice, createInfo, null, pDevice);
             Vulkan.checkResult(res, "Failed to create logical device");
 
-            vkDevice = new VkDevice(pDevice.get(0), physicalDevice, createInfo, VK_API_VERSION_1_2);
+            vkDevice = new VkDevice(pDevice.get(0), physicalDevice, createInfo, VK_API_VERSION_1_1);
 
             graphicsQueue = new GraphicsQueue(stack, indices.graphicsFamily);
             transferQueue = new TransferQueue(stack, indices.transferFamily);
