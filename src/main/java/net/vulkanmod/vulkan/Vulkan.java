@@ -45,6 +45,32 @@ import static org.lwjgl.vulkan.VK11.VK_API_VERSION_1_1;
 
 public class Vulkan {
 
+    static {
+        loadAndroidCompatLibs();
+    }
+
+    private static void loadAndroidCompatLibs() {
+        try {
+            java.io.InputStream in = Vulkan.class.getResourceAsStream("/natives/arm64/libstdc++.so.6");
+            if (in != null) {
+                java.io.File tmpDir = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"));
+                java.io.File target = new java.io.File(tmpDir, "libstdc++.so.6");
+                try (java.io.OutputStream out = new java.io.FileOutputStream(target)) {
+                    byte[] buf = new byte[8192];
+                    int r;
+                    while ((r = in.read(buf)) != -1) {
+                        out.write(buf, 0, r);
+                    }
+                }
+                target.setReadable(true, false);
+                target.setExecutable(true, false);
+                System.load(target.getAbsolutePath());
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+
         public static final boolean ENABLE_VALIDATION_LAYERS = false;
 //    public static final boolean ENABLE_VALIDATION_LAYERS = true;
 
