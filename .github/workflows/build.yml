@@ -31,6 +31,7 @@ jobs:
             patchelf --replace-needed libc.so.6 libc.so src/main/resources/natives/arm64/libstdc++.so.6 || true
             patchelf --replace-needed libm.so.6 libm.so src/main/resources/natives/arm64/libstdc++.so.6 || true
             patchelf --remove-needed ld-linux-aarch64.so.1 src/main/resources/natives/arm64/libstdc++.so.6 || true
+            python3 -c "import patch_natives; f="src/main/resources/natives/arm64/libstdc++.so.6"; open(f, "wb").write(patch_natives.strip_all_versioning(open(f, "rb").read()))"
         else
             aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
         fi
