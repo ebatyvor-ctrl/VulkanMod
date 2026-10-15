@@ -1,10 +1,43 @@
 // ==============================================================================
 // VulkanMod Android Bionic Master Freestanding Shim (libstdc++.so.6)
-// Complete 133-symbol bridge for liblwjgl_vma.so, libshaderc.so & libspvc.so
-// ZERO external dependencies (-nostdlib)
+// Complete 133-symbol bridge + REAL Memory Allocation
 // ==============================================================================
 
-// glibc FORTIFY_SOURCE Dummies (needed by libshaderc.so)
+#include <stddef.h>
+
+// Реальный аллокатор памяти для operator new (предотвращает SIGSEGV в shaderc)
+extern void* malloc(unsigned long) __attribute__((weak));
+extern void free(void*) __attribute__((weak));
+
+static char s_heap[4 * 1024 * 1024]; // 4MB fallback memory pool
+static unsigned long s_heap_pos = 0;
+
+static void* safe_alloc(unsigned long sz) {
+    if (malloc) {
+        void* p = malloc(sz);
+        if (p) return p;
+    }
+    unsigned long aligned = (sz + 15) & ~15UL;
+    if (s_heap_pos + aligned <= sizeof(s_heap)) {
+        void* p = (void*)&s_heap[s_heap_pos];
+        s_heap_pos += aligned;
+        return p;
+    }
+    return (void*)&s_heap[0];
+}
+
+void* _Znwm(unsigned long sz) { return safe_alloc(sz); }
+void* _Znam(unsigned long sz) { return safe_alloc(sz); }
+void* _ZnwmRKSt9nothrow_t(unsigned long sz, void* tag) { return safe_alloc(sz); }
+void* _ZnamRKSt9nothrow_t(unsigned long sz, void* tag) { return safe_alloc(sz); }
+
+void _ZdlPv(void* ptr) { if (ptr && free) free(ptr); }
+void _ZdlPvm(void* ptr, unsigned long sz) { if (ptr && free) free(ptr); }
+void _ZdaPv(void* ptr) { if (ptr && free) free(ptr); }
+void _ZdaPvm(void* ptr, unsigned long sz) { if (ptr && free) free(ptr); }
+void _ZdlPvRKSt9nothrow_t(void* ptr, void* tag) { if (ptr && free) free(ptr); }
+
+// glibc FORTIFY_SOURCE Dummies
 int __fprintf_chk(void* fp, int flag, const char* format, ...) { return 0; }
 int __printf_chk(int flag, const char* format, ...) { return 0; }
 int __snprintf_chk(char* s, unsigned long maxlen, int flag, unsigned long slen, const char* format, ...) {
@@ -24,7 +57,7 @@ int vsnprintf(char* s, unsigned long maxlen, const char* format, void* ap) {
 void __floatunditf(void) {}
 void __trunctfdf2(void) {}
 
-// Unwind & Personality routines (BOTH gcc and gxx)
+// Unwind & Personality routines
 void __gcc_personality_v0(void) {}
 void __gxx_personality_v0(void) {}
 void _Unwind_Resume(void) {}
@@ -36,7 +69,7 @@ void _ITM_deregisterTMCloneTable(void) {}
 void _ITM_registerTMCloneTable(void) {}
 void __cxa_finalize(void* dso) {}
 
-// C++ Exception handlers & memory allocators
+// C++ Exception handlers
 void _ZSt20__throw_system_errori(int code) { while (1) {} }
 void _ZSt16__throw_bad_castv(void) { while (1) {} }
 void _ZSt17__throw_bad_allocv(void) { while (1) {} }
@@ -45,13 +78,6 @@ void _ZSt20__throw_length_errorPKc(void) { while (1) {} }
 void _ZSt20__throw_out_of_rangePKc(void) { while (1) {} }
 void _ZSt24__throw_out_of_range_fmtPKcz(void) { while (1) {} }
 void _ZSt25__throw_bad_function_callv(void) { while (1) {} }
-void _ZdlPvm(void* ptr, unsigned long sz) {}
-void _ZdlPv(void* ptr) {}
-void _ZdaPv(void* ptr) {}
-void _ZdlPvRKSt9nothrow_t(void) {}
-void _Znam(void) {}
-void _Znwm(void) {}
-void _ZnwmRKSt9nothrow_t(void) {}
 
 // ABI runtime
 void __cxa_atexit(void) {}
@@ -164,7 +190,7 @@ void* _ZTVN10__cxxabiv120__function_type_infoE[32] = {0};
 void* _ZTVN10__cxxabiv120__si_class_type_infoE[32] = {0};
 void* _ZTVN10__cxxabiv121__vmi_class_type_infoE[32] = {0};
 
-// Stream & stringbuf vtables (vklyuchaya _ZTVSt9basic_ios...)
+// Stream & stringbuf vtables
 void* _ZTVNSt7__cxx1115basic_stringbufIcSt11char_traitsIcESaIcEEE[32] = {0};
 void* _ZTVNSt7__cxx1118basic_stringstreamIcSt11char_traitsIcESaIcEEE[32] = {0};
 void* _ZTVNSt7__cxx1119basic_istringstreamIcSt11char_traitsIcESaIcEEE[32] = {0};
