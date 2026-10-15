@@ -22,18 +22,9 @@ jobs:
     - name: Install Tools and Build Android stubs
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++6-arm64-cross patchelf zip unzip python3
+        sudo apt-get install -y gcc-aarch64-linux-gnu patchelf zip unzip python3
         mkdir -p src/main/resources/natives/arm64
-        REAL_LIBSTDCXX=$(find /usr/aarch64-linux-gnu/lib -name "libstdc++.so.6" | head -n 1)
-        if [ -n "$REAL_LIBSTDCXX" ]; then
-            echo "Bundling real GNU libstdc++ from $REAL_LIBSTDCXX"
-            cp -L "$REAL_LIBSTDCXX" src/main/resources/natives/arm64/libstdc++.so.6
-            patchelf --replace-needed libc.so.6 libc.so src/main/resources/natives/arm64/libstdc++.so.6 || true
-            patchelf --replace-needed libm.so.6 libm.so src/main/resources/natives/arm64/libstdc++.so.6 || true
-            patchelf --remove-needed ld-linux-aarch64.so.1 src/main/resources/natives/arm64/libstdc++.so.6 || true
-        else
-            aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
-        fi
+        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
         aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libgcc_s.so.1 -o src/main/resources/natives/arm64/libgcc_s.so.1 libgcc_s_stub.c
         aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libpthread.so.0 -o src/main/resources/natives/arm64/libpthread.so.0 libpthread_stub.c
         aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,ld-linux-aarch64.so.1 -o src/main/resources/natives/arm64/ld-linux-aarch64.so.1 libld_stub.c

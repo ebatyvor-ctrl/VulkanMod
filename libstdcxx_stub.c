@@ -1,7 +1,9 @@
 void _ZSt20__throw_system_errori(int code) { while (1) {} }
 void _ZdlPvm(void* ptr, unsigned long sz) {}
+void _ZdlPv(void* ptr) {}
+void _ZdaPv(void* ptr) {}
 
-// Полный набор RTTI vtables Itanium C++ ABI
+// Полный набор RTTI vtables для VMA и Shaderc
 void* _ZTVN10__cxxabiv117__class_type_infoE[8] = {0};
 void* _ZTVN10__cxxabiv120__si_class_type_infoE[8] = {0};
 void* _ZTVN10__cxxabiv121__vmi_class_type_infoE[8] = {0};
