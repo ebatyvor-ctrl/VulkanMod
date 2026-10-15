@@ -120,7 +120,7 @@ public abstract class Queue {
                         && (queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
                     indices.computeFamily = i;
                 } else if ((queueFlags & (VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT)) == 0
-                        && (queueFlags & VK_QUEUE_TRANSFER_BIT) != 0) {
+                        && (queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0) {
                     indices.transferFamily = i;
                 }
 
@@ -152,7 +152,7 @@ public abstract class Queue {
                 for (int i = 0; i < queueFamilies.capacity(); i++) {
                     int queueFlags = queueFamilies.get(i).queueFlags();
 
-                    if ((queueFlags & VK_QUEUE_TRANSFER_BIT) != 0) {
+                    if ((queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0) {
                         if (transferIndex == -1)
                             transferIndex = i;
 
