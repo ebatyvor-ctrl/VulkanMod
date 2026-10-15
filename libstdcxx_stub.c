@@ -173,3 +173,6 @@ void* _ZTVSt13basic_filebufIcSt11char_traitsIcEE[32] = {0};
 void* _ZTVSt14basic_ofstreamIcSt11char_traitsIcEE[32] = {0};
 void* _ZTVSt15basic_streambufIcSt11char_traitsIcEE[32] = {0};
 void* _ZTVSt9basic_iosIcSt11char_traitsIcEE[32] = {0};
+
+// Fallback for libshaderc spvutils guard variable
+unsigned long _ZGVZN8spvutils8HexFloatINS_10FloatProxyIfEENS_14HexFloatTraitsIS2_EEE31getRoundedNormalizedSignificandINS0_INS1_INS_7Float16EEENS3_IS8_EEEEEENT_9uint_typeENS_15round_directionEPbE17first_rounded_bit = 1;

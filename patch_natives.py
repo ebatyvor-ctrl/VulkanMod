@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 import glob, os, io, subprocess, zipfile, struct
 
-def strip_all_versioning(data):
-    """
-    Нейтрализует DT_VERNEED (0x6ffffffe), DT_VERNEEDNUM (0x6fffffff) и DT_VERSYM (0x6ffffff0)
-    в заголовке PT_DYNAMIC. Полностью исключает ошибку verneed[0] в Android Bionic.
-    """
+def fix_elf_for_android(data):
     data = bytearray(data)
     if len(data) < 64 or data[:4] != b'\x7fELF':
         return bytes(data)
 
-    e_phoff = struct.unpack('<Q', data[32:40])[0]
-    e_phentsize = struct.unpack('<H', data[54:56])[0]
-    e_phnum = struct.unpack('<H', data[56:58])[0]
+    e_shoff, e_shentsize, e_shnum = struct.unpack('<QxxHH', data[40:50] + data[58:62])
+    e_phoff, e_phentsize, e_phnum = struct.unpack('<QxxHH', data[32:42] + data[54:58])
 
+    # 1. Зануляем теги версионирования glibc в PT_DYNAMIC
     for i in range(e_phnum):
         p_offset = e_phoff + i * e_phentsize
         p_type = struct.unpack('<I', data[p_offset:p_offset+4])[0]
@@ -24,6 +20,24 @@ def strip_all_versioning(data):
                 tag = struct.unpack('<q', data[p_fileoff+j:p_fileoff+j+8])[0]
                 if tag in [0x6ffffffe, 0x6fffffff, 0x6ffffff0]:
                     struct.pack_into('<q', data, p_fileoff+j, 0)
+
+    # 2. Исправляем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1) в таблицах символов
+    for i in range(e_shnum):
+        offset = e_shoff + i * e_shentsize
+        sh_type = struct.unpack('<I', data[offset+4:offset+8])[0]
+        if sh_type in [11, 2]:
+            sh_offset = struct.unpack('<Q', data[offset+24:offset+32])[0]
+            sh_size = struct.unpack('<Q', data[offset+32:offset+40])[0]
+            sh_entsize = struct.unpack('<Q', data[offset+56:offset+64])[0]
+            if sh_entsize == 0:
+                sh_entsize = 24
+            for ent in range(0, sh_size, sh_entsize):
+                st_info_pos = sh_offset + ent + 4
+                if st_info_pos < len(data):
+                    st_info = data[st_info_pos]
+                    if (st_info >> 4) == 10:  # STB_GNU_UNIQUE
+                        data[st_info_pos] = (1 << 4) | (st_info & 0xf)  # STB_GLOBAL
+
     return bytes(data)
 
 def patch_single_elf(filename, data):
@@ -32,17 +46,14 @@ def patch_single_elf(filename, data):
         f.write(data)
 
     try:
-        # Заменяем только glibc pthread и libc
         subprocess.run(["patchelf", "--replace-needed", "libpthread.so.0", "libc.so", tmp_path], check=False)
         subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", tmp_path], check=False)
         subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", tmp_path], check=False)
 
-        # НЕ удаляем ld-linux, libgcc_s и libstdc++ — они предзагружаются VulkanMod!
         with open(tmp_path, "rb") as f:
             data = f.read()
 
-        # Полностью глушим DT_VERNEED и DT_VERSYM
-        data = strip_all_versioning(data)
+        data = fix_elf_for_android(data)
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -72,7 +83,7 @@ def main():
         patched = patch_embedded(content)
         with open(jar, "wb") as f:
             f.write(patched)
-        print(f"[patch_natives] Patched: {jar}")
+        print(f"[patch_natives] Successfully patched: {jar}")
 
 if __name__ == "__main__":
     main()
