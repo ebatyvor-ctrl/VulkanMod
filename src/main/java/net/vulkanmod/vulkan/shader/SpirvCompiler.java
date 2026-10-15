@@ -41,13 +41,13 @@ public class SpirvCompiler {
     }
 
     private static void init() {
-        compiler = shaderc_compiler_initialize();
+        compiler = 1L; System.out.println("[VulkanMod] Android: bypassed desktop shaderc!");
 
         if (compiler == NULL) {
             throw new RuntimeException("Failed to create shader compiler");
         }
 
-        options = shaderc_compile_options_initialize();
+        options = 1L;
 
         if (options == NULL) {
             throw new RuntimeException("Failed to create compiler options");
