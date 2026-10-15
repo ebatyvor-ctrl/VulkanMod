@@ -21,8 +21,6 @@ def strip_all_versioning(elf_bytes):
     if not dynamic_offset:
         return elf_bytes
 
-    # Нейтрализуем только управляющие теги в заголовке PT_DYNAMIC
-    # НЕ трогаем саму память релокаций DT_RELA!
     for j in range(0, dynamic_size, 16):
         tag, val = struct.unpack('<QQ', data[dynamic_offset + j : dynamic_offset + j + 16])
         if tag in (0x6ffffff0, 0x6ffffffc, 0x6ffffffd, 0x6ffffffe, 0x6fffffff):
@@ -34,7 +32,6 @@ def patch_elf_binary(data):
     with open("tmp.so", "wb") as f:
         f.write(data)
     
-    # Подменяем glibc libc и libm на Android
     subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", "tmp.so"], check=False)
     subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", "tmp.so"], check=False)
 
