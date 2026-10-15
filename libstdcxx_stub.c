@@ -202,3 +202,10 @@ void* _ZTVSt9basic_iosIcSt11char_traitsIcEE[32] = {0};
 
 // Fallback for libshaderc spvutils guard variable
 unsigned long _ZGVZN8spvutils8HexFloatINS_10FloatProxyIfEENS_14HexFloatTraitsIS2_EEE31getRoundedNormalizedSignificandINS0_INS1_INS_7Float16EEENS3_IS8_EEEEEENT_9uint_typeENS_15round_directionEPbE17first_rounded_bit = 1;
+
+// GNU gettext stubs for Android Bionic
+char* gettext(const char* msgid) { return (char*)msgid; }
+char* dgettext(const char* domainname, const char* msgid) { return (char*)msgid; }
+char* dcgettext(const char* domainname, const char* msgid, int category) { return (char*)msgid; }
+char* textdomain(const char* domainname) { return (char*)"messages"; }
+char* bindtextdomain(const char* domainname, const char* dirname) { return (char*)""; }
