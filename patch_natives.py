@@ -9,7 +9,7 @@ def fix_elf_for_android(data):
     e_shoff, e_shentsize, e_shnum = struct.unpack('<QxxHH', data[40:50] + data[58:62])
     e_phoff, e_phentsize, e_phnum = struct.unpack('<QxxHH', data[32:42] + data[54:58])
 
-    # 1. Зануляем теги версионирования glibc в PT_DYNAMIC
+    # 1. Зануляем DT_VERNEED, DT_VERNEEDNUM, DT_VERSYM в PT_DYNAMIC
     for i in range(e_phnum):
         p_offset = e_phoff + i * e_phentsize
         p_type = struct.unpack('<I', data[p_offset:p_offset+4])[0]
@@ -21,7 +21,7 @@ def fix_elf_for_android(data):
                 if tag in [0x6ffffffe, 0x6fffffff, 0x6ffffff0]:
                     struct.pack_into('<q', data, p_fileoff+j, 0)
 
-    # 2. Исправляем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1) в таблицах символов
+    # 2. Конвертируем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1)
     for i in range(e_shnum):
         offset = e_shoff + i * e_shentsize
         sh_type = struct.unpack('<I', data[offset+4:offset+8])[0]
@@ -36,7 +36,7 @@ def fix_elf_for_android(data):
                 if st_info_pos < len(data):
                     st_info = data[st_info_pos]
                     if (st_info >> 4) == 10:  # STB_GNU_UNIQUE
-                        data[st_info_pos] = (1 << 4) | (st_info & 0xf)  # STB_GLOBAL
+                        data[st_info_pos] = (1 << 4) | (st_info & 0xf)
 
     return bytes(data)
 
@@ -83,7 +83,7 @@ def main():
         patched = patch_embedded(content)
         with open(jar, "wb") as f:
             f.write(patched)
-        print(f"[patch_natives] Successfully patched: {jar}")
+        print(f"[patch_natives] Done: {jar}")
 
 if __name__ == "__main__":
     main()

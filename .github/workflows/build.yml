@@ -1,45 +1,50 @@
-name: Build VulkanMod 1.1
+name: Build VulkanMod for Android PojavLauncher
 
 on:
   push:
-    branches: [ "dev", "main" ]
+    branches: [ dev, main ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up JDK 21
-      uses: actions/setup-java@v4
-      with:
-        java-version: '21'
-        distribution: 'temurin'
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
 
-    - name: Install Tools and Build Android stubs
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu patchelf zip unzip python3
-        mkdir -p src/main/resources/natives/arm64
-        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
-        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libgcc_s.so.1 -o src/main/resources/natives/arm64/libgcc_s.so.1 libgcc_s_stub.c
-        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libpthread.so.0 -o src/main/resources/natives/arm64/libpthread.so.0 libpthread_stub.c
-        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,ld-linux-aarch64.so.1 -o src/main/resources/natives/arm64/ld-linux-aarch64.so.1 libld_stub.c
+      - name: Install Cross Tools & Real ARM64 C++ Runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libstdc++6-arm64-cross patchelf zip unzip python3
+          mkdir -p src/main/resources/natives/arm64
 
-    - name: Grant execute permission for gradlew
-      run: chmod +x gradlew
+          # 1. Берем НАСТОЯЩИЙ полноценный libstdc++.so.6 для ARM64
+          REAL_LIBSTDCXX=$(find /usr/aarch64-linux-gnu/lib -name "libstdc++.so.6*" -type f | head -n 1)
+          echo "Found real libstdc++: $REAL_LIBSTDCXX"
+          cp -L "$REAL_LIBSTDCXX" src/main/resources/natives/arm64/libstdc++.so.6
 
-    - name: Build with Gradle
-      run: ./gradlew build --stacktrace
+          # 2. Патчим зависимости real libstdc++ на системные Android Bionic
+          patchelf --replace-needed libc.so.6 libc.so src/main/resources/natives/arm64/libstdc++.so.6 || true
+          patchelf --replace-needed libm.so.6 libm.so src/main/resources/natives/arm64/libstdc++.so.6 || true
 
-    - name: Post-process and patch all embedded ARM64 binaries
-      run: python3 patch_natives.py
+          # 3. Собираем легкие заглушки для libgcc_s, libpthread и ld-linux
+          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libgcc_s.so.1 -o src/main/resources/natives/arm64/libgcc_s.so.1 libgcc_s_stub.c
+          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libpthread.so.0 -o src/main/resources/natives/arm64/libpthread.so.0 libpthread_stub.c || true
+          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,ld-linux-aarch64.so.1 -o src/main/resources/natives/arm64/ld-linux-aarch64.so.1 ldlinux_stub.c || true
 
-    - name: Upload build artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: VulkanMod-1.1-build
-        path: build/libs/*.jar
+      - name: Build with Gradle
+        run: ./gradlew build --no-daemon
+
+      - name: Post-process and patch all embedded ARM64 binaries
+        run: python3 patch_natives.py
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VulkanMod-1.1-build
+          path: build/libs/*.jar
