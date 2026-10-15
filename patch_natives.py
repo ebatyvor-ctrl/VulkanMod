@@ -76,7 +76,7 @@ def patch_embedded(jar_bytes):
                 data = in_z.read(item.filename)
                 if item.filename.endswith(".jar"):
                     data = patch_embedded(data)
-                elif ".so" in item.filename:  # ЛОВИТ .so, .so.6, .so.1, .so.0!
+                elif ".so" in item.filename:
                     data = patch_single_elf(item.filename, data)
                 out_z.writestr(item, data)
         return out_buf.getvalue()

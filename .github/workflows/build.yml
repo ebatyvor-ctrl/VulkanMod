@@ -28,13 +28,13 @@ jobs:
           echo "Found real libstdc++: $REAL_LIBSTDCXX"
           cp -L "$REAL_LIBSTDCXX" src/main/resources/natives/arm64/libstdc++.so.6
 
-          # 2. СРАЗУ патчим libstdc++.so.6 до сборки JAR (снимаем STB_GNU_UNIQUE 10 -> 1)
+          # 2. СРАЗУ патчим libstdc++.so.6 до сборки JAR (снимаем STB_GNU_UNIQUE 10 -> 1 и DT_VERNEED)
           python3 patch_natives.py src/main/resources/natives/arm64/libstdc++.so.6
 
           # 3. Собираем заглушки для libgcc_s, libpthread и ld-linux
           aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libgcc_s.so.1 -o src/main/resources/natives/arm64/libgcc_s.so.1 libgcc_s_stub.c
-          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libpthread.so.0 -o src/main/resources/natives/arm64/libpthread.so.0 libpthread_stub.c || true
-          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,ld-linux-aarch64.so.1 -o src/main/resources/natives/arm64/ld-linux-aarch64.so.1 ldlinux_stub.c || true
+          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libpthread.so.0 -o src/main/resources/natives/arm64/libpthread.so.0 libpthread_stub.c
+          aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,ld-linux-aarch64.so.1 -o src/main/resources/natives/arm64/ld-linux-aarch64.so.1 ldlinux_stub.c
 
       - name: Build with Gradle
         run: ./gradlew build --no-daemon
