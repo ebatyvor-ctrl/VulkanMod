@@ -1,13 +1,18 @@
 import glob, os, io, subprocess, zipfile, struct
 
-def strip_all_versioning(elf_bytes):
+def fix_elf_symbols_and_versioning(elf_bytes):
     data = bytearray(elf_bytes)
     if len(data) < 64 or data[:4] != b'\x7fELF' or data[4] != 2:
         return elf_bytes
+
     e_phoff = struct.unpack('<Q', data[32:40])[0]
     e_phentsize = struct.unpack('<H', data[54:56])[0]
     e_phnum = struct.unpack('<H', data[56:58])[0]
-    
+    e_shoff = struct.unpack('<Q', data[40:48])[0]
+    e_shentsize = struct.unpack('<H', data[58:60])[0]
+    e_shnum = struct.unpack('<H', data[60:62])[0]
+
+    # 1. Нейтрализуем теги версионирования glibc в PT_DYNAMIC
     dynamic_offset = 0
     dynamic_size = 0
     for i in range(e_phnum):
@@ -17,14 +22,27 @@ def strip_all_versioning(elf_bytes):
             dynamic_offset = struct.unpack('<Q', ph[8:16])[0]
             dynamic_size = struct.unpack('<Q', ph[32:40])[0]
             break
-            
-    if not dynamic_offset:
-        return elf_bytes
 
-    for j in range(0, dynamic_size, 16):
-        tag, val = struct.unpack('<QQ', data[dynamic_offset + j : dynamic_offset + j + 16])
-        if tag in (0x6ffffff0, 0x6ffffffc, 0x6ffffffd, 0x6ffffffe, 0x6fffffff):
-            struct.pack_into('<QQ', data, dynamic_offset + j, 0x6ffffdf5, 0)
+    if dynamic_offset:
+        for j in range(0, dynamic_size, 16):
+            tag, val = struct.unpack('<QQ', data[dynamic_offset + j : dynamic_offset + j + 16])
+            if tag in (0x6ffffff0, 0x6ffffffc, 0x6ffffffd, 0x6ffffffe, 0x6fffffff):
+                struct.pack_into('<QQ', data, dynamic_offset + j, 0x6ffffdf5, 0)
+
+    # 2. Исправляем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1), чтобы Android Bionic не игнорировал символы!
+    if e_shoff != 0 and e_shnum != 0:
+        for i in range(e_shnum):
+            sh = data[e_shoff + i * e_shentsize : e_shoff + (i + 1) * e_shentsize]
+            sh_type = struct.unpack('<I', sh[4:8])[0]
+            if sh_type in (11, 2): # SHT_DYNSYM (11) или SHT_SYMTAB (2)
+                sh_offset = struct.unpack('<Q', sh[24:32])[0]
+                sh_size = struct.unpack('<Q', sh[32:40])[0]
+                for k in range(sh_offset, sh_offset + sh_size, 24):
+                    st_info = data[k + 4]
+                    bind = st_info >> 4
+                    st_type = st_info & 0x0f
+                    if bind == 10: # STB_GNU_UNIQUE
+                        data[k + 4] = (1 << 4) | st_type # Превращаем в STB_GLOBAL!
 
     return bytes(data)
 
@@ -40,7 +58,7 @@ def patch_elf_binary(data):
     if os.path.exists("tmp.so"):
         os.remove("tmp.so")
     
-    return strip_all_versioning(patched)
+    return fix_elf_symbols_and_versioning(patched)
 
 def patch_inner_jar(jar_bytes):
     with zipfile.ZipFile(io.BytesIO(jar_bytes), "r") as in_z:
