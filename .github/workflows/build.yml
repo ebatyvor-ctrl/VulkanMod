@@ -22,36 +22,18 @@ jobs:
     - name: Install Tools and Build Pure Android libstdc++.so.6
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu patchelf zip unzip
+        sudo apt-get install -y gcc-aarch64-linux-gnu patchelf zip unzip python3
         mkdir -p src/main/resources/natives/arm64
         aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
 
-    - name: Pre-download Gradle dependencies
-      run: ./gradlew --refresh-dependencies || true
-
-    - name: Patch all ARM64 natives for Android Bionic
-      run: |
-        find ~/.gradle/caches -name "*natives-linux-arm64*.jar" | while read -r jarfile; do
-          echo "Patching jar: $jarfile"
-          tmpdir=$(mktemp -d)
-          unzip -q "$jarfile" -d "$tmpdir"
-          find "$tmpdir" -name "*.so" | while read -r sofile; do
-            echo "  Patching so: $sofile"
-            patchelf --replace-needed libgcc_s.so.1 libc.so "$sofile" 2>/dev/null || true
-            patchelf --replace-needed libpthread.so.0 libc.so "$sofile" 2>/dev/null || true
-            patchelf --replace-needed libc.so.6 libc.so "$sofile" 2>/dev/null || true
-            patchelf --replace-needed libm.so.6 libm.so "$sofile" 2>/dev/null || true
-            patchelf --remove-needed ld-linux-aarch64.so.1 "$sofile" 2>/dev/null || true
-          done
-          (cd "$tmpdir" && zip -q -r "$jarfile" .)
-          rm -rf "$tmpdir"
-        done
-
     - name: Build with Gradle
       run: ./gradlew build --stacktrace
+
+    - name: Post-process and patch all embedded ARM64 binaries
+      run: python3 patch_natives.py
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4
