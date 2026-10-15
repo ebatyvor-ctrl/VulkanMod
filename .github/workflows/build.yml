@@ -19,12 +19,13 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
-    - name: Install Tools and Build Pure Android libstdc++.so.6
+    - name: Install Tools and Build Android stubs
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-aarch64-linux-gnu patchelf zip unzip python3
         mkdir -p src/main/resources/natives/arm64
         aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
+        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libgcc_s.so.1 -o src/main/resources/natives/arm64/libgcc_s.so.1 libgcc_s_stub.c
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew

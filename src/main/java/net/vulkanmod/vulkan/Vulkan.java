@@ -51,40 +51,64 @@ public class Vulkan {
 
     private static void loadAndroidCompatLibs() {
         try {
-            java.io.InputStream in = Vulkan.class.getResourceAsStream("/natives/arm64/libstdc++.so.6");
+            java.io.File tmpDir = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"));
+            cleanStaleLwjglCache(tmpDir);
+
+            preloadResourceLib(tmpDir, "libstdc++.so.6");
+            preloadResourceLib(tmpDir, "libgcc_s.so.1");
+        } catch (Throwable t) {
+            System.err.println("[VulkanMod] Error preloading libs: " + t.getMessage());
+        }
+    }
+
+    private static void preloadResourceLib(java.io.File tmpDir, String libName) {
+        try {
+            java.io.InputStream in = Vulkan.class.getResourceAsStream("/natives/arm64/" + libName);
             if (in == null) return;
             byte[] bytes = in.readAllBytes();
 
-            java.io.File tmpDir = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"));
-            java.io.File target = new java.io.File(tmpDir, "libstdc++.so.6");
+            java.io.File target = new java.io.File(tmpDir, libName);
             try (java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
                 out.write(bytes);
             }
             target.setReadable(true, false);
             target.setExecutable(true, false);
 
-            deployToLwjglDirs(tmpDir, bytes);
+            deployToLwjglDirs(tmpDir, libName, bytes);
 
             System.load(target.getAbsolutePath());
-            System.out.println("[VulkanMod] Successfully preloaded libstdc++.so.6!");
+            System.out.println("[VulkanMod] Successfully preloaded " + libName + "!");
         } catch (Throwable t) {
-            System.err.println("[VulkanMod] Warning: Failed to preload libstdc++.so.6: " + t.getMessage());
+            System.err.println("[VulkanMod] Warning: Failed to preload " + libName + ": " + t.getMessage());
         }
     }
 
-    private static void deployToLwjglDirs(java.io.File dir, byte[] data) {
+    private static void cleanStaleLwjglCache(java.io.File dir) {
+        if (dir == null || !dir.exists() || !dir.isDirectory()) return;
+        java.io.File[] files = dir.listFiles();
+        if (files == null) return;
+        for (java.io.File f : files) {
+            if (f.isDirectory()) {
+                cleanStaleLwjglCache(f);
+            } else if (f.getName().equals("liblwjgl_vma.so") || f.getName().equals("libshaderc.so")) {
+                f.delete();
+            }
+        }
+    }
+
+    private static void deployToLwjglDirs(java.io.File dir, String libName, byte[] data) {
         if (dir == null || !dir.exists() || !dir.isDirectory()) return;
         java.io.File[] files = dir.listFiles();
         if (files == null) return;
         for (java.io.File f : files) {
             if (f.isDirectory()) {
                 if (f.getName().equals("arm64")) {
-                    java.io.File dest = new java.io.File(f, "libstdc++.so.6");
+                    java.io.File dest = new java.io.File(f, libName);
                     try (java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
                         out.write(data);
                     } catch (Throwable ignored) {}
                 } else {
-                    deployToLwjglDirs(f, data);
+                    deployToLwjglDirs(f, libName, data);
                 }
             }
         }
