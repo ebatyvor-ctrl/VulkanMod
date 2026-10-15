@@ -4,8 +4,9 @@ def patch_elf_binary(data):
     with open("tmp.so", "wb") as f:
         f.write(data)
     
-    subprocess.run(["patchelf", "--remove-needed", "libpthread.so.0", "tmp.so"], check=False)
+    # Корректно удаляем/заменяем зависимости без повреждения смещений ELF
     subprocess.run(["patchelf", "--remove-needed", "ld-linux-aarch64.so.1", "tmp.so"], check=False)
+    subprocess.run(["patchelf", "--remove-needed", "libpthread.so.0", "tmp.so"], check=False)
     subprocess.run(["patchelf", "--remove-needed", "libgcc_s.so.1", "tmp.so"], check=False)
     subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", "tmp.so"], check=False)
     subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", "tmp.so"], check=False)
@@ -14,11 +15,6 @@ def patch_elf_binary(data):
         patched = f.read()
     if os.path.exists("tmp.so"):
         os.remove("tmp.so")
-    
-    # Бинарная замена строк в .dynstr на случай ограничений patchelf
-    patched = patched.replace(b"libpthread.so.0\x00", b"libc.so\x00\x00\x00\x00\x00\x00\x00\x00")
-    patched = patched.replace(b"libc.so.6\x00", b"libc.so\x00\x00\x00")
-    patched = patched.replace(b"libm.so.6\x00", b"libm.so\x00\x00\x00")
     return patched
 
 def patch_inner_jar(jar_bytes):
