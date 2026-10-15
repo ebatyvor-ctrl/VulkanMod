@@ -1,94 +1,55 @@
-import glob, os, io, subprocess, zipfile, struct
+#!/usr/bin/env python3
+import glob, os, io, subprocess, zipfile
 
-def fix_elf_symbols_and_versioning(elf_bytes):
-    data = bytearray(elf_bytes)
-    if len(data) < 64 or data[:4] != b'\x7fELF' or data[4] != 2:
-        return elf_bytes
-
-    e_phoff = struct.unpack('<Q', data[32:40])[0]
-    e_phentsize = struct.unpack('<H', data[54:56])[0]
-    e_phnum = struct.unpack('<H', data[56:58])[0]
-    e_shoff = struct.unpack('<Q', data[40:48])[0]
-    e_shentsize = struct.unpack('<H', data[58:60])[0]
-    e_shnum = struct.unpack('<H', data[60:62])[0]
-
-    # 1. Нейтрализуем теги версионирования glibc в PT_DYNAMIC
-    dynamic_offset = 0
-    dynamic_size = 0
-    for i in range(e_phnum):
-        ph = data[e_phoff + i * e_phentsize : e_phoff + (i + 1) * e_phentsize]
-        p_type = struct.unpack('<I', ph[0:4])[0]
-        if p_type == 2: # PT_DYNAMIC
-            dynamic_offset = struct.unpack('<Q', ph[8:16])[0]
-            dynamic_size = struct.unpack('<Q', ph[32:40])[0]
-            break
-
-    if dynamic_offset:
-        for j in range(0, dynamic_size, 16):
-            tag, val = struct.unpack('<QQ', data[dynamic_offset + j : dynamic_offset + j + 16])
-            if tag in (0x6ffffff0, 0x6ffffffc, 0x6ffffffd, 0x6ffffffe, 0x6fffffff):
-                struct.pack_into('<QQ', data, dynamic_offset + j, 0x6ffffdf5, 0)
-
-    # 2. Исправляем STB_GNU_UNIQUE (10) -> STB_GLOBAL (1), чтобы Android Bionic не игнорировал символы!
-    if e_shoff != 0 and e_shnum != 0:
-        for i in range(e_shnum):
-            sh = data[e_shoff + i * e_shentsize : e_shoff + (i + 1) * e_shentsize]
-            sh_type = struct.unpack('<I', sh[4:8])[0]
-            if sh_type in (11, 2): # SHT_DYNSYM (11) или SHT_SYMTAB (2)
-                sh_offset = struct.unpack('<Q', sh[24:32])[0]
-                sh_size = struct.unpack('<Q', sh[32:40])[0]
-                for k in range(sh_offset, sh_offset + sh_size, 24):
-                    st_info = data[k + 4]
-                    bind = st_info >> 4
-                    st_type = st_info & 0x0f
-                    if bind == 10: # STB_GNU_UNIQUE
-                        data[k + 4] = (1 << 4) | st_type # Превращаем в STB_GLOBAL!
-
-    return bytes(data)
-
-def patch_elf_binary(data):
-    with open("tmp.so", "wb") as f:
+def patch_single_elf(filename, data):
+    tmp_path = "tmp_native.so"
+    with open(tmp_path, "wb") as f:
         f.write(data)
-    
-    subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", "tmp.so"], check=False)
-    subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", "tmp.so"], check=False)
 
-    with open("tmp.so", "rb") as f:
-        patched = f.read()
-    if os.path.exists("tmp.so"):
-        os.remove("tmp.so")
-    
-    return fix_elf_symbols_and_versioning(patched)
+    try:
+        # Заменяем glibc на системный Bionic
+        subprocess.run(["patchelf", "--replace-needed", "libpthread.so.0", "libc.so", tmp_path], check=False)
+        subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", tmp_path], check=False)
+        subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", tmp_path], check=False)
+        subprocess.run(["patchelf", "--remove-needed", "ld-linux-aarch64.so.1", tmp_path], check=False)
 
-def patch_inner_jar(jar_bytes):
+        # НЕ ТРОГАЕМ libgcc_s.so.1 и libstdc++.so.6! Они предзагружены в Vulkan.java
+
+        # Снимаем glibc-версионирование символов
+        subprocess.run(["patchelf", "--clear-symbol-version", tmp_path], check=False)
+
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    return data
+
+def patch_embedded(jar_bytes):
     with zipfile.ZipFile(io.BytesIO(jar_bytes), "r") as in_z:
         out_buf = io.BytesIO()
         with zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED) as out_z:
             for item in in_z.infolist():
                 data = in_z.read(item.filename)
-                if item.filename.endswith(".so"):
-                    print("  Patching ELF:", item.filename)
-                    data = patch_elf_binary(data)
+                if item.filename.endswith(".jar"):
+                    data = patch_embedded(data)
+                elif item.filename.endswith(".so"):
+                    data = patch_single_elf(item.filename, data)
                 out_z.writestr(item, data)
         return out_buf.getvalue()
 
-jars = [j for j in glob.glob("build/libs/*.jar") if not j.endswith("-sources.jar") and not j.endswith("-javadoc.jar")]
-print("Found jars to patch:", jars)
+def main():
+    jars = glob.glob("build/libs/*.jar")
+    print(f"[patch_natives] Found {len(jars)} jars: {jars}")
+    for jar in jars:
+        print(f"[patch_natives] Patching {jar}...")
+        with open(jar, "rb") as f:
+            content = f.read()
+        patched = patch_embedded(content)
+        with open(jar, "wb") as f:
+            f.write(patched)
+        print(f"[patch_natives] Done: {jar}")
 
-for jar_path in jars:
-    print("Processing main JAR:", jar_path)
-    with zipfile.ZipFile(jar_path, "r") as in_main:
-        out_main_buf = io.BytesIO()
-        with zipfile.ZipFile(out_main_buf, "w", compression=zipfile.ZIP_DEFLATED) as out_main:
-            for item in in_main.infolist():
-                data = in_main.read(item.filename)
-                if ("natives-linux-arm64" in item.filename or "arm64" in item.filename) and item.filename.endswith(".jar"):
-                    print("Patching nested jar:", item.filename)
-                    data = patch_inner_jar(data)
-                elif item.filename.endswith(".so"):
-                    print("Patching direct so in jar:", item.filename)
-                    data = patch_elf_binary(data)
-                out_main.writestr(item, data)
-    with open(jar_path, "wb") as f:
-        f.write(out_main_buf.getvalue())
-    print("Successfully patched and repacked:", jar_path)
+if __name__ == "__main__":
+    main()
