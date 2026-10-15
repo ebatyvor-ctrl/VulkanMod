@@ -1,13 +1,31 @@
-import glob, os, io, subprocess, zipfile
+import glob, os, io, subprocess, zipfile, struct
+
+def strip_verneed(elf_bytes):
+    data = bytearray(elf_bytes)
+    if len(data) < 64 or data[:4] != b'\x7fELF' or data[4] != 2: # только 64-bit ELF
+        return elf_bytes
+    e_phoff = struct.unpack('<Q', data[32:40])[0]
+    e_phentsize = struct.unpack('<H', data[54:56])[0]
+    e_phnum = struct.unpack('<H', data[56:58])[0]
+    for i in range(e_phnum):
+        ph = data[e_phoff + i * e_phentsize : e_phoff + (i + 1) * e_phentsize]
+        p_type = struct.unpack('<I', ph[0:4])[0]
+        if p_type == 2: # PT_DYNAMIC
+            p_offset = struct.unpack('<Q', ph[8:16])[0]
+            p_filesz = struct.unpack('<Q', ph[32:40])[0]
+            for j in range(0, p_filesz, 16):
+                tag, val = struct.unpack('<QQ', data[p_offset + j : p_offset + j + 16])
+                # 0x6ffffffe = DT_VERNEED, 0x6fffffff = DT_VERNEEDNUM
+                if tag in (0x6ffffffe, 0x6fffffff):
+                    # Заменяем на DT_GNU_FLAGS_1 (no-op tag) с нулевым значением
+                    struct.pack_into('<QQ', data, p_offset + j, 0x6ffffdf5, 0)
+    return bytes(data)
 
 def patch_elf_binary(data):
     with open("tmp.so", "wb") as f:
         f.write(data)
     
-    # Корректно удаляем/заменяем зависимости без повреждения смещений ELF
-    subprocess.run(["patchelf", "--remove-needed", "ld-linux-aarch64.so.1", "tmp.so"], check=False)
-    subprocess.run(["patchelf", "--remove-needed", "libpthread.so.0", "tmp.so"], check=False)
-    subprocess.run(["patchelf", "--remove-needed", "libgcc_s.so.1", "tmp.so"], check=False)
+    # Заменяем glibc библиотеки на Android Bionic
     subprocess.run(["patchelf", "--replace-needed", "libc.so.6", "libc.so", "tmp.so"], check=False)
     subprocess.run(["patchelf", "--replace-needed", "libm.so.6", "libm.so", "tmp.so"], check=False)
 
@@ -15,7 +33,9 @@ def patch_elf_binary(data):
         patched = f.read()
     if os.path.exists("tmp.so"):
         os.remove("tmp.so")
-    return patched
+    
+    # Нейтрализуем секцию версионирования glibc, чтобы Android не искал verneed
+    return strip_verneed(patched)
 
 def patch_inner_jar(jar_bytes):
     with zipfile.ZipFile(io.BytesIO(jar_bytes), "r") as in_z:

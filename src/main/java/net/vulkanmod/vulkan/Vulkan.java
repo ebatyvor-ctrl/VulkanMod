@@ -57,6 +57,7 @@ public class Vulkan {
             preloadResourceLib(tmpDir, "libstdc++.so.6");
             preloadResourceLib(tmpDir, "libgcc_s.so.1");
             preloadResourceLib(tmpDir, "libpthread.so.0");
+            preloadResourceLib(tmpDir, "ld-linux-aarch64.so.1");
         } catch (Throwable t) {
             System.err.println("[VulkanMod] Error preloading libs: " + t.getMessage());
         }
