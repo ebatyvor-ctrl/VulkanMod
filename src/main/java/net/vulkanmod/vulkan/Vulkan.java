@@ -52,15 +52,43 @@ public class Vulkan {
     private static void loadAndroidCompatLibs() {
         try {
             java.io.InputStream in = Vulkan.class.getResourceAsStream("/natives/arm64/libstdc++.so.6");
-            if (in != null) {
-                java.io.File tmpDir = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"));
-                java.io.File target = new java.io.File(tmpDir, "libstdc++.so.6");
-                try (java.io.OutputStream out = new java.io.FileOutputStream(target)) {
-                    byte[] buf = new byte[8192];
-                    int r;
-                    while ((r = in.read(buf)) != -1) {
-                        out.write(buf, 0, r);
-                    }
+            if (in == null) return;
+            byte[] bytes = in.readAllBytes();
+
+            java.io.File tmpDir = new java.io.File(System.getProperty("java.io.tmpdir", "/tmp"));
+            java.io.File target = new java.io.File(tmpDir, "libstdc++.so.6");
+            try (java.io.FileOutputStream out = new java.io.FileOutputStream(target)) {
+                out.write(bytes);
+            }
+            target.setReadable(true, false);
+            target.setExecutable(true, false);
+
+            deployToLwjglDirs(tmpDir, bytes);
+
+            System.load(target.getAbsolutePath());
+            System.out.println("[VulkanMod] Successfully preloaded libstdc++.so.6!");
+        } catch (Throwable t) {
+            System.err.println("[VulkanMod] Warning: Failed to preload libstdc++.so.6: " + t.getMessage());
+        }
+    }
+
+    private static void deployToLwjglDirs(java.io.File dir, byte[] data) {
+        if (dir == null || !dir.exists() || !dir.isDirectory()) return;
+        java.io.File[] files = dir.listFiles();
+        if (files == null) return;
+        for (java.io.File f : files) {
+            if (f.isDirectory()) {
+                if (f.getName().equals("arm64")) {
+                    java.io.File dest = new java.io.File(f, "libstdc++.so.6");
+                    try (java.io.FileOutputStream out = new java.io.FileOutputStream(dest)) {
+                        out.write(data);
+                    } catch (Throwable ignored) {}
+                } else {
+                    deployToLwjglDirs(f, data);
+                }
+            }
+        }
+    }
                 }
                 target.setReadable(true, false);
                 target.setExecutable(true, false);

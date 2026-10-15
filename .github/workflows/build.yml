@@ -19,12 +19,12 @@ jobs:
         java-version: '21'
         distribution: 'temurin'
 
-    - name: Install ARM64 Cross-Compiler and Build libstdc++.so.6
+    - name: Install ARM64 Tool and Build Pure Android libstdc++.so.6
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-aarch64-linux-gnu
         mkdir -p src/main/resources/natives/arm64
-        aarch64-linux-gnu-gcc -shared -fPIC -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
+        aarch64-linux-gnu-gcc -shared -fPIC -nostdlib -Wl,-soname,libstdc++.so.6 -o src/main/resources/natives/arm64/libstdc++.so.6 libstdcxx_stub.c
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
