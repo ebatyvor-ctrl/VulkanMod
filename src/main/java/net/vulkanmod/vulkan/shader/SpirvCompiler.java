@@ -48,6 +48,7 @@ public class SpirvCompiler {
         }
 
         options = 1L;
+        if (true) return;
 
         if (options == NULL) {
             throw new RuntimeException("Failed to create compiler options");
